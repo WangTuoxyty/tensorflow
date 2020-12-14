@@ -734,7 +734,10 @@ cuda_py_test(
     size = "medium",
     srcs = ["lib/check_numerics_callback_test.py"],
     python_version = "PY3",
-    tags = ["no_windows"],
+    tags = [
+        "no_mac",  # TODO(b/175322370): Detected Infinity or NaN in output 0 of graph op "RealDiv"
+        "no_windows",
+    ],
     deps = [
         ":check_numerics_callback",
         "//tensorflow/python:framework_test_lib",
@@ -788,7 +791,6 @@ cuda_py_test(
         "//tensorflow/python:training",
         "//tensorflow/python:variables",
         "//tensorflow/python/data/ops:dataset_ops",
-        "//tensorflow/python/keras",
         "//third_party/py/numpy",
     ],
 )
@@ -1275,6 +1277,7 @@ cuda_py_test(
     tags = [
         "no_oss",  # Test flaky due to port collisions.
         "no_windows",
+        "notap",  # TODO(b/160925973): Test flaky due to port collisions.
         "notsan",
         "oss_serial",
     ],
@@ -1334,6 +1337,7 @@ cuda_py_test(
     tags = [
         "no_oss",  # Incompatible with bazel_pip.
         "no_windows",
+        "notap",  # TODO(b/160822489) flaky timeouts
         "notsan",
     ],
     xla_enable_strict_auto_jit = False,  # Node names are different with autojit
@@ -1400,7 +1404,6 @@ py_test(
         "//tensorflow/python:state_ops",
         "//tensorflow/python:training",
         "//tensorflow/python:variables",
-        "//tensorflow/python/keras",
         "//third_party/py/numpy",
     ],
 )

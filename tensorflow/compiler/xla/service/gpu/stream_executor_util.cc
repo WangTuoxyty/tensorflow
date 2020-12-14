@@ -18,6 +18,7 @@ limitations under the License.
 #include "absl/memory/memory.h"
 #include "tensorflow/compiler/xla/layout_util.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
+#include "tensorflow/compiler/xla/shape.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
@@ -122,8 +123,8 @@ StreamExecutorConvLayoutsToXlaLayouts(const ConvolutionDimensionNumbers& dnums,
 
 StatusOr<std::tuple<DataLayout, FilterLayout, DataLayout>>
 XlaConvLayoutsToStreamExecutorLayouts(const ConvolutionDimensionNumbers& dnums,
-                                      const Layout& input, const Layout& filter,
-                                      const Layout& output) {
+                                      const Shape& input, const Shape& filter,
+                                      const Shape& output) {
   Layout nchw_input, nchw_filter, nchw_output;
   std::tie(nchw_input, nchw_filter, nchw_output) =
       StreamExecutorConvLayoutsToXlaLayouts(dnums, DataLayout::kBatchDepthYX,
@@ -139,35 +140,35 @@ XlaConvLayoutsToStreamExecutorLayouts(const ConvolutionDimensionNumbers& dnums,
           .ConsumeValueOrDie();
 
   DataLayout input_layout;
-  if (LayoutUtil::Equal(input, nchw_input)) {
+  if (ShapeUtil::ShapeIsComatibleWithLayout(input, nchw_input)) {
     input_layout = DataLayout::kBatchDepthYX;
-  } else if (LayoutUtil::Equal(input, nhwc_input)) {
+  } else if (ShapeUtil::ShapeIsComatibleWithLayout(input, nhwc_input)) {
     input_layout = DataLayout::kBatchYXDepth;
   } else {
-    return InternalError("Invalid input layout %s for conv with dnums %s",
-                         LayoutUtil::HumanString(input),
+    return InternalError("Invalid input shape %s for conv with dnums %s",
+                         ShapeUtil::HumanStringWithLayout(input),
                          ConvolutionDimensionNumbersToString(dnums));
   }
 
   FilterLayout filter_layout;
-  if (LayoutUtil::Equal(filter, nchw_filter)) {
+  if (ShapeUtil::ShapeIsComatibleWithLayout(filter, nchw_filter)) {
     filter_layout = FilterLayout::kOutputInputYX;
-  } else if (LayoutUtil::Equal(filter, nhwc_filter)) {
+  } else if (ShapeUtil::ShapeIsComatibleWithLayout(filter, nhwc_filter)) {
     filter_layout = FilterLayout::kOutputYXInput;
   } else {
-    return InternalError("Invalid filter layout %s for conv with dnums %s",
-                         LayoutUtil::HumanString(filter),
+    return InternalError("Invalid filter shape %s for conv with dnums %s",
+                         ShapeUtil::HumanStringWithLayout(filter),
                          ConvolutionDimensionNumbersToString(dnums));
   }
 
   DataLayout output_layout;
-  if (LayoutUtil::Equal(output, nchw_output)) {
+  if (ShapeUtil::ShapeIsComatibleWithLayout(output, nchw_output)) {
     output_layout = DataLayout::kBatchDepthYX;
-  } else if (LayoutUtil::Equal(output, nhwc_output)) {
+  } else if (ShapeUtil::ShapeIsComatibleWithLayout(output, nhwc_output)) {
     output_layout = DataLayout::kBatchYXDepth;
   } else {
-    return InternalError("Invalid output layout %s for conv with dnums %s",
-                         LayoutUtil::HumanString(output),
+    return InternalError("Invalid output shape %s for conv with dnums %s",
+                         ShapeUtil::HumanStringWithLayout(output),
                          ConvolutionDimensionNumbersToString(dnums));
   }
 
@@ -209,22 +210,28 @@ StatusOr<std::unique_ptr<se::KernelBase>> CreateKernel(
 
 Status ExecuteKernelOnStream(const se::KernelBase& kernel,
                              absl::Span<const se::DeviceMemoryBase> args,
-                             int64 threads_per_block, int64 block_count,
-                             se::Stream* stream) {
+                             const LaunchDimensions& dims, se::Stream* stream) {
   static constexpr int kKernelArgsLimit = 1024;
   auto kernel_args = absl::make_unique<se::KernelArgsArray<kKernelArgsLimit>>();
   for (const se::DeviceMemoryBase& buf : args) {
     kernel_args->add_device_memory_argument(buf);
   }
-  return stream->parent()->Launch(stream, se::ThreadDim(threads_per_block),
-                                  se::BlockDim(block_count), kernel,
-                                  *kernel_args);
+  LaunchDimensions::Dim3D thread_counts = dims.thread_counts_per_block();
+  LaunchDimensions::Dim3D block_counts = dims.block_counts();
+  return stream->parent()->Launch(
+      stream, se::ThreadDim(thread_counts.x, thread_counts.y, thread_counts.z),
+      se::BlockDim(block_counts.x, block_counts.y, block_counts.z), kernel,
+      *kernel_args);
 }
 
 se::GpuAsmOpts PtxOptsFromConfig(const HloModuleConfig& hlo_module_config) {
+  string extra_string =
+      hlo_module_config.debug_options().xla_gpu_asm_extra_flags();
+  std::vector<std::string> extra_flags;
+  extra_flags = absl::StrSplit(extra_string, ",", absl::SkipEmpty());
   return se::GpuAsmOpts(
       hlo_module_config.debug_options().xla_gpu_disable_gpuasm_optimizations(),
-      hlo_module_config.debug_options().xla_gpu_cuda_data_dir());
+      hlo_module_config.debug_options().xla_gpu_cuda_data_dir(), extra_flags);
 }
 
 // Unimplemented for integers yet.
@@ -311,6 +318,36 @@ void InitializeBuffer(se::Stream* stream, PrimitiveType buffer_type,
     default:
       LOG(FATAL) << "Unexpected type";
   }
+}
+
+StatusOr<se::dnn::ConvolutionKind> GetDNNConvKindFromCudnnConvKind(
+    CudnnConvKind kind) {
+  switch (kind) {
+    case CudnnConvKind::kBackwardFilter:
+      return se::dnn::BACKWARD_FILTER;
+    case CudnnConvKind::kBackwardInput:
+      return se::dnn::BACKWARD_DATA;
+    case CudnnConvKind::kForward:
+      return se::dnn::FORWARD;
+    default:
+      break;
+  }
+  return InternalError("Unexpected convolution kind");
+}
+
+StatusOr<se::dnn::DataType> GetDNNDataTypeFromPrimitiveType(
+    PrimitiveType type) {
+  switch (type) {
+    case F16:
+      return se::dnn::ToDataType<Eigen::half>::value;
+    case F32:
+      return se::dnn::ToDataType<float>::value;
+    case F64:
+      return se::dnn::ToDataType<double>::value;
+    default:
+      break;
+  }
+  return InternalError("Unsupported convolution datatype");
 }
 
 }  // namespace gpu

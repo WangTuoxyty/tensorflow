@@ -269,6 +269,14 @@ class ShapeUtil {
     if (SameElementType(a, b)) {
       return a.element_type();
     }
+    // If only one of A and B are floating use the floating point type.
+    if (ElementIsFloating(a) && !ElementIsFloating(b)) {
+      return a.element_type();
+    }
+    if (ElementIsFloating(b) && !ElementIsFloating(a)) {
+      return b.element_type();
+    }
+    // Use the higher precision type.
     return primitive_util::BitWidth(a.element_type()) <
                    primitive_util::BitWidth(b.element_type())
                ? b.element_type()
@@ -376,6 +384,9 @@ class ShapeUtil {
 
   // Appends a major dimension to the shape with the given bound.
   static void AppendMajorDimension(int bound, Shape* shape);
+
+  // Copy the dynamic dimensions property from one shape to another.
+  static void CopyDynamicDimensions(Shape* to, const Shape& from);
 
   // Returns an empty tuple shape. Can be used as a sentinel Shape value.
   static Shape MakeNil() { return MakeTupleShape({}); }
@@ -634,6 +645,15 @@ class ShapeUtil {
   static bool ReshapeIsBitcast(const Shape& input_shape,
                                const Shape& output_shape);
 
+  // Returns true if changing the layout of the given shape from its existing
+  // one to 'layout' does not change the underlying layout of the elements
+  // in physical memory. As an example the shape 'f16[1,1,1,8]{1,2,3,0}' is
+  // compatible with layout '{2,1,3,0}', since the shape 'f16[1,1,1,8]{2,1,3,0}'
+  // and the shape f16[1,1,1,8]{1,2,3,0} has the same layout of elements in
+  // memory.
+  static bool ShapeIsComatibleWithLayout(const Shape& shape,
+                                         const Layout& layout);
+
   // Find a physical layout for 'output_shape' such that
   // ShapeUtil::ReshapeIsBitcast(input_shape, output_shape_with_layout) returns
   // true (where 'output_shape_with_layout' is 'output_shape' with the found
@@ -657,7 +677,11 @@ class ShapeUtil {
                                 Shape shape);
 
   // Returns true if `dynamic_shape` has dimensions that are less-equal to the
-  // "bounded_shape".
+  // "bounded_shape". Shapes must be arrays.
+  static bool DynamicArrayShapeIsCompatible(const xla::Shape& dynamic_shape,
+                                            const xla::Shape& bounded_shape);
+
+  // Same as DynamicArrayShapeIsCompatible() but supports tuples.
   static bool DynamicShapeIsCompatible(const xla::Shape& dynamic_shape,
                                        const xla::Shape& bounded_shape);
 
@@ -768,7 +792,20 @@ class ShapeUtil {
   static absl::optional<std::vector<int64>> FindTranspose021(const Shape& a,
                                                              const Shape& b);
 
+  // Strips device-specific information, namely tiling and memory-space
+  // information, from a shape.
+  static Shape DeviceShapeToHostShape(Shape s);
+
+  // Returns true iff integral shape `from` can be safely upcasted to integral
+  // shape `to`.
+  static bool CanUpcastIntegral(const Shape& from, const Shape& to);
+
  private:
+  // Fills *shape. Returns true on success.
+  // REQUIRES: *shape is empty.
+  static bool FillNewShape(PrimitiveType element_type,
+                           absl::Span<const int64> dimensions, Shape* shape);
+
   // Validates the shape size is sane. This makes sure it's safe to do
   // calculations in int64 without overflowing.
   static Status ValidateShapeSize(const Shape& shape);

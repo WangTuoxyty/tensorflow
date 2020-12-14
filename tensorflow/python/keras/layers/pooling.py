@@ -164,8 +164,9 @@ class MaxPooling1D(Pooling1D):
       for each pooling step.
       If None, it will default to `pool_size`.
     padding: One of `"valid"` or `"same"` (case-insensitive).
-      "valid" adds no padding.  "same" adds padding such that if the stride
-      is 1, the output shape is the same as the input shape.
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.
@@ -209,6 +210,9 @@ class AveragePooling1D(Pooling1D):
       E.g. 2 will halve the input.
       If None, it will default to `pool_size`.
     padding: One of `"valid"` or `"same"` (case-insensitive).
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.
@@ -334,10 +338,11 @@ class MaxPooling2D(Pooling2D):
   window defined by `pool_size` for each dimension along the features axis.
   The window is shifted by `strides` in each dimension.  The resulting output
   when using "valid" padding option has a shape(number of rows or columns) of:
-  `output_shape = (input_shape - pool_size + 1) / strides)`
+  `output_shape = math.floor((input_shape - pool_size) / strides) + 1`
+  (when input_shape >= pool_size)
 
   The resulting output shape when using the "same" padding option is:
-  `output_shape = input_shape / strides`
+  `output_shape = math.floor((input_shape - 1) / strides) + 1`
 
   For example, for stride=(1,1) and padding="valid":
 
@@ -419,8 +424,9 @@ class MaxPooling2D(Pooling2D):
       Strides values.  Specifies how far the pooling window moves
       for each pooling step. If None, it will default to `pool_size`.
     padding: One of `"valid"` or `"same"` (case-insensitive).
-      "valid" adds no zero padding.  "same" adds padding such that if the stride
-      is 1, the output shape is the same as input shape.
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.
@@ -475,6 +481,9 @@ class AveragePooling2D(Pooling2D):
       Strides values.
       If None, it will default to `pool_size`.
     padding: One of `"valid"` or `"same"` (case-insensitive).
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.
@@ -617,6 +626,9 @@ class MaxPooling3D(Pooling3D):
       `(2, 2, 2)` will halve the size of the 3D input in each dimension.
     strides: tuple of 3 integers, or None. Strides values.
     padding: One of `"valid"` or `"same"` (case-insensitive).
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.
@@ -667,6 +679,9 @@ class AveragePooling3D(Pooling3D):
       `(2, 2, 2)` will halve the size of the 3D input in each dimension.
     strides: tuple of 3 integers, or None. Strides values.
     padding: One of `"valid"` or `"same"` (case-insensitive).
+      `"valid"` means no padding. `"same"` results in padding evenly to 
+      the left/right or up/down of the input such that output has the same 
+      height/width dimension as the input.
     data_format: A string,
       one of `channels_last` (default) or `channels_first`.
       The ordering of the dimensions in the inputs.

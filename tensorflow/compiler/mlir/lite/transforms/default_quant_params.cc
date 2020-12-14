@@ -17,8 +17,8 @@ limitations under the License.
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/StandardTypes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "absl/memory/memory.h"
@@ -110,8 +110,7 @@ void DefaultQuantParamsPass::runOnFunction() {
   func.walk([&](Operation *op) {
     if (op->isKnownTerminator() ||
         op->hasTrait<OpTrait::quant::NoQuantizableResult>() ||
-        llvm::isa<quant::QuantizeCastOp>(op) ||
-        llvm::isa<quant::DequantizeCastOp>(op))
+        llvm::isa<quant::QuantizeCastOp, quant::DequantizeCastOp>(op))
       return;
 
     for (auto res : op->getResults()) {

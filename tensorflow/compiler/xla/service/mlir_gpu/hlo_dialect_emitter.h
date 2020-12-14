@@ -21,9 +21,8 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/Function.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/IR/Module.h"  // from @llvm-project
 #include "tensorflow/compiler/xla/service/dfs_hlo_visitor_with_default.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
@@ -56,6 +55,7 @@ class HloDialectEmitter : public DfsHloVisitorWithDefault {
   Status HandleCompare(HloInstruction* instr) override;
   Status HandleConcatenate(HloInstruction* instr) override;
   Status HandleConstant(HloInstruction* instr) override;
+  Status HandleGather(HloInstruction* instr) override;
   Status HandleIota(HloInstruction* instr) override;
   Status HandleParameter(HloInstruction* instr) override;
   Status HandleReduce(HloInstruction* instr) override;

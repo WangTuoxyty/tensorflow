@@ -36,6 +36,7 @@ limitations under the License.
 #include "tensorflow/core/framework/control_flow.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/framework/log_memory.h"
+#include "tensorflow/core/framework/metrics.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/op_segment.h"
@@ -56,6 +57,7 @@ limitations under the License.
 #include "tensorflow/core/lib/hash/hash.h"
 #include "tensorflow/core/platform/context.h"
 #include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
@@ -64,11 +66,20 @@ limitations under the License.
 #include "tensorflow/core/platform/tracing.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/profiler/lib/annotated_traceme.h"
+#include "tensorflow/core/profiler/lib/connected_traceme.h"
 #include "tensorflow/core/profiler/lib/scoped_annotation.h"
-#include "tensorflow/core/profiler/lib/traceme.h"
+#include "tensorflow/core/profiler/lib/traceme_encode.h"
+#include "tensorflow/core/protobuf/error_codes.pb.h"
 #include "tensorflow/core/util/tensor_slice_reader_cache.h"
 
 namespace tensorflow {
+
+// Temporary flag for controlling whether to always track kernel execution
+// costs.
+static bool always_track_kernel_execution_cost = false;
+void EnableAlwaysTrackKernelExecutionCost() {
+  always_track_kernel_execution_cost = true;
+}
 namespace {
 
 // 1-D, 0 element tensor.
@@ -175,12 +186,6 @@ class ExecutorImpl : public Executor {
     // Updates the dynamic cost estimate, which is used to determine whether the
     // given node is expensive. The new cost estimate is a weighted average of
     // the old cost estimate and the latest cost.
-    //
-    // NOTE: We currently only expect updates to the cost estimate when
-    // `is_expensive_[node.node_id]` is true (or at least, it *was* true, when
-    // we started to execute the kernel. As a result, we expect that a kernel
-    // can only ever transition from "expensive" to "inexpensive", but not vice
-    // versa.
     void UpdateCostEstimate(const NodeItem& node, uint64 elapsed_cycles) {
       // N.B. Updates to `cost_estimate` are atomic but unlocked.  Simultaneous
       // updates may result in one or more updates being ignored.  This does not
@@ -191,9 +196,10 @@ class ExecutorImpl : public Executor {
                                 kCostDecay +
                             (elapsed_cycles / kCostDecay);
       cost_estimate.store(new_estimate, std::memory_order_relaxed);
-      if (new_estimate < kOpIsExpensiveThresholdCycles) {
-        is_expensive_[node.node_id].store(false, std::memory_order_relaxed);
-      }
+
+      bool new_is_expensive = (new_estimate >= kOpIsExpensiveThresholdCycles);
+      is_expensive_[node.node_id].store(new_is_expensive,
+                                        std::memory_order_relaxed);
     }
 
    private:
@@ -320,6 +326,12 @@ class ExecutorState {
   // REQUIRES: `!ready->empty()`.
   void ScheduleReady(TaggedNodeSeq* ready, TaggedNodeReadyQueue* inline_ready);
 
+  // A wrapper for runner_ to keep track of the pending queue length. Op
+  // execution should dispatch work using this function instead of using runner_
+  // directly.
+  template <typename Closure>
+  void RunTask(Closure&& c);
+
   // Clean up when this executor is done.
   void Finish();
   void ScheduleFinish();
@@ -418,6 +430,30 @@ ExecutorState<PropagatorStateType>::~ExecutorState() {
     device_context_->Unref();
   }
   delete slice_reader_cache_;
+}
+
+template <class PropagatorStateType>
+template <typename Closure>
+void ExecutorState<PropagatorStateType>::RunTask(Closure&& c) {
+  // Align the atomic variables at 64 bytes to avoid false-sharing, assuming the
+  // cacheline size is 64 bytes or smaller.
+  alignas(64) static std::atomic<int64_t> num_enqueue_ops{0};
+  alignas(64) static std::atomic<int64_t> num_dequeue_ops{0};
+
+  auto n_enqueues = num_enqueue_ops.fetch_add(1, std::memory_order_relaxed);
+  // Sample the queue length on every 16 enqueue operations. This amortizes the
+  // cost of metric updates across 16 operations.
+  if (n_enqueues % 16 == 0) {
+    auto n_dequeues = num_dequeue_ops.load(std::memory_order_relaxed);
+    metrics::UpdateGraphPendingQueueLength(n_enqueues - n_dequeues);
+  }
+
+  // mutable is needed because std::forward<Closure> in the lambda body may move
+  // the Closure `c`.
+  runner_([c = std::forward<Closure>(c)]() mutable {
+    num_dequeue_ops.fetch_add(1, std::memory_order_relaxed);
+    std::forward<Closure>(c)();
+  });
 }
 
 template <class PropagatorStateType>
@@ -527,9 +563,9 @@ Status ExecutorState<PropagatorStateType>::ProcessSync(
     tracing::ScopedRegion region(tracing::EventCategory::kCompute,
                                  op_kernel->name_view());
     profiler::AnnotatedTraceMe activity(
-        [&] {
+        [op_kernel, &ctx] {
           return op_kernel->TraceString(
-              &ctx, /*verbose=*/profiler::TfOpDetailsEnabled());
+              ctx, /*verbose=*/profiler::TfOpDetailsEnabled());
         },
         profiler::GetTFTraceMeLevel(is_expensive));
     device->Compute(op_kernel, &ctx);
@@ -539,6 +575,15 @@ Status ExecutorState<PropagatorStateType>::ProcessSync(
       KernelTimer timer;
       device->Compute(op_kernel, &ctx);
       kernel_stats_->UpdateCostEstimate(item, timer.ElapsedCycles());
+    } else if (always_track_kernel_execution_cost) {
+      KernelTimer timer;
+      device->Compute(op_kernel, &ctx);
+      // If always_track_kernel_execution_cost is set, update the cost estimate
+      // for inexpensive kernels with ~1/8 probability. This assumes that the
+      // last 3 bits of the CPU cycle count is uniformly distributed.
+      constexpr int kKernelExecutionTrackingInvocationSkipCount = 8;
+      if (timer.start_cycles % kKernelExecutionTrackingInvocationSkipCount == 0)
+        kernel_stats_->UpdateCostEstimate(item, timer.ElapsedCycles());
     } else {
       device->Compute(op_kernel, &ctx);
     }
@@ -594,9 +639,9 @@ void ExecutorState<PropagatorStateType>::ProcessAsync(
   nodestats::SetOpStart(stats);
   {
     profiler::AnnotatedTraceMe activity(
-        [&] {
+        [async_kernel, state] {
           return async_kernel->TraceString(
-              &state->ctx, /*verbose=*/profiler::TfOpDetailsEnabled());
+              state->ctx, /*verbose=*/profiler::TfOpDetailsEnabled());
         },
         profiler::GetTFTraceMeLevel(kernel_stats_->IsExpensive(item)));
     immutable_state_.params().device->ComputeAsync(async_kernel, &state->ctx,
@@ -625,16 +670,20 @@ void ExecutorState<PropagatorStateType>::ProcessConstTensor(
 template <class PropagatorStateType>
 void ExecutorState<PropagatorStateType>::Process(TaggedNode tagged_node,
                                                  int64 scheduled_nsec) {
-  profiler::TraceMe activity(
+  profiler::TraceMeConsumer activity(
+      // From TraceMeProducer in DirectSession::RunInternal,
+      // GraphMgr::ExecuteAsync, or FunctionLibraryRuntime::Run.
       [&] {
         // NOTE: This tracing uses the iteration number from the first tagged
         // node that executes during this call to `Process()`. In principle,
         // subsequent nodes could have different values of `iter_num` that
         // will not be traced.
-        return absl::StrCat("ExecutorState::Process#id=", step_id_,
-                            ",iter_num=", tagged_node.get_iter_num(), "#");
+        return profiler::TraceMeEncode(
+            "ExecutorState::Process",
+            {{"id", step_id_}, {"iter_num", tagged_node.get_iter_num()}});
       },
-      2);
+      profiler::ContextType::kTfExecutor, step_id_,
+      profiler::TraceMeLevel::kInfo);
   WithContext wc(context_);
   TaggedNodeSeq ready;
   TaggedNodeReadyQueue inline_ready;
@@ -1054,10 +1103,12 @@ bool ExecutorState<PropagatorStateType>::NodeDone(
         // aborting all other execution in the step.
         abort_run = true;
 
-        // If execution has been cancelled, mark any new errors as being
-        // derived. This ensures any errors triggered by cancellation are marked
-        // as derived.
-        if (cancellation_manager_ && cancellation_manager_->IsCancelled()) {
+        // If execution has been cancelled, mark cancelled or aborted errors as
+        // being derived. Note that the original node that fails might also
+        // trigger cancellation, and here we make sure the original error is
+        // exposed to users and not buried as a derived error.
+        if (cancellation_manager_ && cancellation_manager_->IsCancelled() &&
+            (errors::IsCancelled(s) || errors::IsAborted(s))) {
           status_ = StatusGroup::MakeDerived(s);
         } else {
           status_ = s;
@@ -1079,11 +1130,13 @@ bool ExecutorState<PropagatorStateType>::NodeDone(
       if (rendezvous_) {
         rendezvous_->StartAbort(s);
       }
-      if (collective_executor_) {
-        collective_executor_->StartAbort(s);
-      }
       if (cancellation_manager_) {
         cancellation_manager_->StartCancel();
+      } else if (collective_executor_) {
+        // If there's cancellation_manager_, collective ops aborts
+        // collective_executor_ upon cancellation; otherwise we need to abort
+        // here.
+        collective_executor_->StartAbort(s);
       }
     }
 
@@ -1107,7 +1160,7 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
       // regardless of the `runner_` implementation, all kernels will run
       // sequentially on the same thread, and thread wakeup overhead and
       // executor mutex contention will be minimized.
-      runner_([this, ready = std::move(*ready), scheduled_nsec]() {
+      RunTask([this, ready = std::move(*ready), scheduled_nsec]() {
         for (auto& tagged_node : ready) {
           Process(tagged_node, scheduled_nsec);
         }
@@ -1122,7 +1175,7 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
     if (inline_ready == nullptr) {
       // Schedule to run all the ready ops in thread pool.
       for (auto& tagged_node : *ready) {
-        runner_([=]() { Process(tagged_node, scheduled_nsec); });
+        RunTask([=]() { Process(tagged_node, scheduled_nsec); });
       }
     } else {
       for (auto& tagged_node : *ready) {
@@ -1134,7 +1187,7 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
           if (curr_expensive_node) {
             // Dispatch to another thread since there is plenty of work to
             // do for this thread.
-            runner_(std::bind(&ExecutorState::Process, this,
+            RunTask(std::bind(&ExecutorState::Process, this,
                               *curr_expensive_node, scheduled_nsec));
           }
           curr_expensive_node = &tagged_node;
@@ -1147,7 +1200,7 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
       } else {
         // There are inline nodes to run already. We dispatch this expensive
         // node to other thread.
-        runner_(std::bind(&ExecutorState::Process, this, *curr_expensive_node,
+        RunTask(std::bind(&ExecutorState::Process, this, *curr_expensive_node,
                           scheduled_nsec));
       }
     }
@@ -1227,20 +1280,26 @@ void ExecutorState<PropagatorStateType>::Finish() {
       if (rendezvous_) {
         rendezvous_->StartAbort(status);
       }
-      if (collective_executor_) {
-        collective_executor_->StartAbort(status);
-      }
       if (cancellation_manager_) {
         cancellation_manager_->StartCancel();
+      } else if (collective_executor_) {
+        // If there's cancellation_manager_, collective ops aborts
+        // collective_executor_ upon cancellation; otherwise we need to abort
+        // here.
+        collective_executor_->StartAbort(status);
       }
     }
     delete this;
     runner([step_id, status, done_cb = std::move(done_cb)]() {
-      profiler::TraceMe traceme(
+      profiler::TraceMeConsumer activity(
+          // From TraceMeProducer in KernelAndDeviceFunc::RunAsync,
+          // DirectSession::RunInternal or GraphMgr::ExecuteAsync.
           [&] {
-            return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
+            return profiler::TraceMeEncode("ExecutorDoneCallback",
+                                           {{"id", step_id}});
           },
-          2);
+          profiler::ContextType::kTfExecutor, step_id,
+          profiler::TraceMeLevel::kInfo);
       done_cb(status);
     });
     return;
@@ -1255,22 +1314,30 @@ void ExecutorState<PropagatorStateType>::Finish() {
                   done_cb = std::move(done_cb)](const Status& status) mutable {
       delete this;
       runner([step_id, status, done_cb = std::move(done_cb)]() {
-        profiler::TraceMe traceme(
+        profiler::TraceMeConsumer activity(
+            // From TraceMeProducer in KernelAndDeviceFunc::RunAsync,
+            // DirectSession::RunInternal or GraphMgr::ExecuteAsync.
             [&] {
-              return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
+              return profiler::TraceMeEncode("ExecutorDoneCallback",
+                                             {{"id", step_id}});
             },
-            2);
+            profiler::ContextType::kTfExecutor, step_id,
+            profiler::TraceMeLevel::kInfo);
         done_cb(status);
       });
     });
   } else {
     delete this;
     runner([step_id, status, done_cb = std::move(done_cb)]() {
-      profiler::TraceMe traceme(
+      profiler::TraceMeConsumer activity(
+          // From TraceMeProducer in KernelAndDeviceFunc::RunAsync,
+          // DirectSession::RunInternal or GraphMgr::ExecuteAsync.
           [&] {
-            return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
+            return profiler::TraceMeEncode("ExecutorDoneCallback",
+                                           {{"id", step_id}});
           },
-          2);
+          profiler::ContextType::kTfExecutor, step_id,
+          profiler::TraceMeLevel::kInfo);
       done_cb(status);
     });
   }

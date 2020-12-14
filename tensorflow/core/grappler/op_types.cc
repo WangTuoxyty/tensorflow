@@ -113,9 +113,13 @@ bool IsBiasAdd(const NodeDef& node) {
   return node.op() == "BiasAdd" || node.op() == "BiasAddV1";
 }
 
+bool IsBiasAddV2(const NodeDef& node) { return node.op() == "BiasAdd"; }
+
 bool IsBiasAddGrad(const NodeDef& node) { return node.op() == "BiasAddGrad"; }
 
 bool IsBitcast(const NodeDef& node) { return node.op() == "Bitcast"; }
+
+bool IsBroadcastTo(const NodeDef& node) { return node.op() == "BroadcastTo"; }
 
 bool IsCast(const NodeDef& node) { return node.op() == "Cast"; }
 
@@ -183,6 +187,14 @@ bool IsConv2DBackpropInput(const NodeDef& node) {
 }
 
 bool IsConv3D(const NodeDef& node) { return node.op() == "Conv3D"; }
+
+bool IsConv3DBackpropFilterV2(const NodeDef& node) {
+  return node.op() == "Conv3DBackpropFilterV2";
+}
+
+bool IsConv3DBackpropInputV2(const NodeDef& node) {
+  return node.op() == "Conv3DBackpropInputV2";
+}
 
 bool IsDepthwiseConv2dNative(const NodeDef& node) {
   return node.op() == "DepthwiseConv2dNative";
@@ -324,6 +336,12 @@ bool IsImmutableConst(const NodeDef& node) {
 
 bool IsInvGrad(const NodeDef& node) { return node.op() == "InvGrad"; }
 
+bool IsLeakyRelu(const NodeDef& node) { return node.op() == "LeakyRelu"; }
+
+bool IsLeakyReluGrad(const NodeDef& node) {
+  return node.op() == "LeakyReluGrad";
+}
+
 bool IsLess(const NodeDef& node) { return node.op() == "Less"; }
 
 bool IsLessEqual(const NodeDef& node) { return node.op() == "LessEqual"; }
@@ -425,6 +443,10 @@ bool IsRank(const NodeDef& node) { return node.op() == "Rank"; }
 
 bool IsReadVariableOp(const NodeDef& node) {
   return node.op() == "ReadVariableOp";
+}
+
+bool IsReadVariablesOp(const NodeDef& node) {
+  return node.op() == "_ReadVariablesOp";
 }
 
 bool IsReal(const NodeDef& node) { return node.op() == "Real"; }
@@ -560,6 +582,8 @@ bool IsSwitch(const NodeDef& node) {
 bool IsSymbolicGradient(const NodeDef& node) {
   return node.op() == "SymbolicGradient";
 }
+
+bool IsTanh(const NodeDef& node) { return node.op() == "Tanh"; }
 
 bool IsTanhGrad(const NodeDef& node) { return node.op() == "TanhGrad"; }
 

@@ -52,7 +52,6 @@ from tensorflow.lite.testing.op_tests.cast import make_cast_tests
 from tensorflow.lite.testing.op_tests.ceil import make_ceil_tests
 from tensorflow.lite.testing.op_tests.concat import make_concat_tests
 from tensorflow.lite.testing.op_tests.constant import make_constant_tests
-from tensorflow.lite.testing.op_tests.control_dep import make_control_dep_tests
 from tensorflow.lite.testing.op_tests.conv import make_conv_tests
 from tensorflow.lite.testing.op_tests.conv2d_transpose import make_conv2d_transpose_tests
 from tensorflow.lite.testing.op_tests.conv_activation import make_conv_relu_tests, make_conv_relu1_tests, make_conv_relu6_tests
@@ -125,7 +124,6 @@ from tensorflow.lite.testing.op_tests.resize_nearest_neighbor import make_resize
 from tensorflow.lite.testing.op_tests.resolve_constant_strided_slice import make_resolve_constant_strided_slice_tests
 from tensorflow.lite.testing.op_tests.reverse_sequence import make_reverse_sequence_tests
 from tensorflow.lite.testing.op_tests.reverse_v2 import make_reverse_v2_tests
-from tensorflow.lite.testing.op_tests.rfft2d import make_rfft2d_tests
 from tensorflow.lite.testing.op_tests.round import make_round_tests
 from tensorflow.lite.testing.op_tests.scatter_nd import make_scatter_nd_tests
 from tensorflow.lite.testing.op_tests.shape import make_shape_tests

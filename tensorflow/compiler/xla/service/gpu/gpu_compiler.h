@@ -21,6 +21,7 @@ limitations under the License.
 #include <vector>
 
 #include "tensorflow/compiler/xla/service/executable.h"
+#include "tensorflow/compiler/xla/service/gpu/gpu_device_info.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_executable.h"
 #include "tensorflow/compiler/xla/service/hlo_dataflow_analysis.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
@@ -52,7 +53,13 @@ class GpuCompiler : public LLVMCompiler {
 
   StatusOr<std::unique_ptr<HloModule>> RunHloPasses(
       std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
-      se::DeviceMemoryAllocator* device_allocator) override;
+      const CompileOptions& options) override;
+
+  StatusOr<
+      std::tuple<std::unique_ptr<HloModule>, std::unique_ptr<BufferAssignment>>>
+  RunHloPassesAndBufferAssignement(std::unique_ptr<HloModule> hlo_module,
+                                   se::StreamExecutor* executor, bool optimize,
+                                   const CompileOptions& options) override;
 
   Status OptimizeHloModule(HloModule* hlo_module,
                            se::StreamExecutor* stream_exec,
@@ -76,30 +83,48 @@ class GpuCompiler : public LLVMCompiler {
 
   virtual StatusOr<std::pair<std::string, std::vector<uint8>>>
   CompileTargetBinary(const HloModule* hlo_module, llvm::Module* llvm_module,
-                      GpuVersion gpu_version,
-                      se::StreamExecutor* stream_exec) = 0;
+                      GpuVersion gpu_version, se::StreamExecutor* stream_exec,
+                      bool relocatable) = 0;
 
   Status PrepareHloModuleForIrEmitting(HloModule* hlo_module);
 
   StatusOr<std::unique_ptr<Executable>> RunBackend(
       std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
-      se::DeviceMemoryAllocator* device_allocator) override;
+      const CompileOptions& options) override;
 
   StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
   CompileAheadOfTime(std::unique_ptr<HloModuleGroup> module_group,
                      AotCompilationOptions const& options) override;
 
+  StatusOr<std::pair<std::string, std::vector<uint8>>> CompileToTargetBinary(
+      const HloModule& module, std::unique_ptr<llvm::Module> llvm_module,
+      se::StreamExecutor* stream_exec, const CompileOptions& options);
+
   se::Platform::Id PlatformId() const override { return platform_id_; }
 
   HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction() const override {
     // Capture just the pointer size, not the entire GpuCompiler object.
-    int64 pointer_size = pointer_size_;
-    return [pointer_size](const Shape& shape) {
-      return ShapeUtil::ByteSizeOf(shape, pointer_size);
+    return [pointer_size = pointer_size_](const Shape& shape) {
+      return GetSizeOfShape(shape, pointer_size);
     };
   }
 
+  static int64 GetSizeOfShape(const Shape& shape, int pointer_size) {
+    if (shape.is_static() || shape.IsTuple()) {
+      return ShapeUtil::ByteSizeOf(shape, pointer_size);
+    }
+    // Each dynamic dimension size is represented as a S32.
+    int64 metadata_size = sizeof(int32) * shape.dimensions_size();
+    return ShapeUtil::ByteSizeOf(shape, pointer_size) + metadata_size;
+  }
+
  private:
+  virtual StatusOr<std::vector<uint8>> LinkModules(
+      se::StreamExecutor* stream_exec,
+      std::vector<std::vector<uint8>> modules) {
+    return Unimplemented("LinkModules is not implemented.");
+  }
+
   se::Platform::Id platform_id_;
 
   // The triple that represents our target.
@@ -113,6 +138,15 @@ class GpuCompiler : public LLVMCompiler {
 
   TF_DISALLOW_COPY_AND_ASSIGN(GpuCompiler);
 };
+
+// Compile `hlo_module` using XLA GPU and return the LLVM module thus generated.
+// The GpuExecutable (and the Thunks that are part of it) are not returned.
+StatusOr<std::unique_ptr<llvm::Module>> CompileModuleToLlvmIr(
+    HloModule* hlo_module, llvm::LLVMContext* llvm_context,
+    const std::string& target_triple, const std::string& data_layout,
+    const std::string& platform_name, GpuDeviceInfo gpu_device_info,
+    absl::optional<CudaComputeCapability> cuda_compute_capability,
+    int pointer_size);
 
 }  // namespace gpu
 }  // namespace xla

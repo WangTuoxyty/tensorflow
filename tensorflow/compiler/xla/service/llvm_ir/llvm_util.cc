@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/base/casts.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -90,10 +91,8 @@ llvm::CallInst* EmitCallToIntrinsic(
 }
 
 llvm::Value* EmitFloatMax(llvm::Value* lhs_value, llvm::Value* rhs_value,
-                          llvm::IRBuilder<>* b) {
-  // TODO(tpopp): Pass this information down from the HLO's ModuleConfig.
-  if (b->getFastMathFlags().noNaNs() ||
-      GetDebugOptionsFromFlags().xla_cpu_enable_fast_min_max()) {
+                          llvm::IRBuilder<>* b, bool enable_fast_min_max) {
+  if (b->getFastMathFlags().noNaNs() || enable_fast_min_max) {
     auto cmp = b->CreateFCmpUGE(lhs_value, rhs_value);
     return b->CreateSelect(cmp, lhs_value, rhs_value);
   } else {
@@ -105,10 +104,8 @@ llvm::Value* EmitFloatMax(llvm::Value* lhs_value, llvm::Value* rhs_value,
 }
 
 llvm::Value* EmitFloatMin(llvm::Value* lhs_value, llvm::Value* rhs_value,
-                          llvm::IRBuilder<>* b) {
-  // TODO(tpopp): Pass this information down from the HLO's ModuleConfig.
-  if (b->getFastMathFlags().noNaNs() ||
-      GetDebugOptionsFromFlags().xla_cpu_enable_fast_min_max()) {
+                          llvm::IRBuilder<>* b, bool enable_fast_min_max) {
+  if (b->getFastMathFlags().noNaNs() || enable_fast_min_max) {
     auto cmp = b->CreateFCmpULE(lhs_value, rhs_value);
     return b->CreateSelect(cmp, lhs_value, rhs_value);
   } else {
@@ -172,7 +169,8 @@ llvm::Type* PrimitiveTypeToIrType(PrimitiveType element_type,
     case F64:
       return llvm::Type::getDoubleTy(module->getContext());
     case C64: {
-      auto cplx_t = module->getTypeByName("complex64");
+      auto cplx_t =
+          llvm::StructType::getTypeByName(module->getContext(), "complex64");
       if (cplx_t == nullptr) {
         // C++ standard dictates the memory layout of std::complex is contiguous
         // real followed by imaginary. C++11 section 26.4 [complex.numbers]:
@@ -189,7 +187,8 @@ llvm::Type* PrimitiveTypeToIrType(PrimitiveType element_type,
       return cplx_t;
     }
     case C128: {
-      auto cplx_t = module->getTypeByName("complex128");
+      auto cplx_t =
+          llvm::StructType::getTypeByName(module->getContext(), "complex128");
       if (cplx_t == nullptr) {
         return llvm::StructType::create(
             {llvm::Type::getDoubleTy(module->getContext()),
@@ -418,9 +417,10 @@ llvm::Instruction* AddRangeMetadata(int64 lower, int64 upper,
   return inst;
 }
 
-string IrName(string a) {
-  a.erase(std::remove(a.begin(), a.end(), '%'), a.end());
-  return a;
+string IrName(absl::string_view a) {
+  std::string s(a);
+  s.erase(std::remove(s.begin(), s.end(), '%'), s.end());
+  return s;
 }
 
 string IrName(absl::string_view a, absl::string_view b) {

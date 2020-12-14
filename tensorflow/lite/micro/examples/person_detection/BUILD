@@ -23,10 +23,13 @@ cc_library(
 cc_library(
     name = "person_detect_model_data",
     srcs = [
-        "person_detect_model_data.cc",
+        "@person_detect_data//:person_detect_model_data",
     ],
     hdrs = [
         "person_detect_model_data.h",
+    ],
+    tags = [
+        "no_oss",  # TODO(b/174680668): Exclude from OSS.
     ],
 )
 
@@ -40,8 +43,31 @@ cc_library(
         "no_person_image_data.h",
         "person_image_data.h",
     ],
+    tags = [
+        "no_oss",  # TODO(b/174680668): Exclude from OSS.
+    ],
     deps = [
         ":model_settings",
+    ],
+)
+
+tflite_micro_cc_test(
+    name = "person_detection_test",
+    srcs = ["person_detection_test.cc"],
+    tags = [
+        "no_oss",  # TODO(b/174680668): Exclude from OSS.
+    ],
+    deps = [
+        ":model_settings",
+        ":person_detect_model_data",
+        ":simple_images_test_data",
+        "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/micro:micro_error_reporter",
+        "//tensorflow/lite/micro:micro_framework",
+        "//tensorflow/lite/micro:op_resolvers",
+        "//tensorflow/lite/micro/testing:micro_test",
+        "//tensorflow/lite/schema:schema_fbs",
     ],
 )
 
@@ -56,7 +82,7 @@ cc_library(
     deps = [
         ":model_settings",
         "//tensorflow/lite/c:common",
-        "//tensorflow/lite/micro:micro_framework",
+        "//tensorflow/lite/micro:micro_error_reporter",
     ],
 )
 
@@ -69,7 +95,7 @@ tflite_micro_cc_test(
         ":image_provider",
         ":model_settings",
         "//tensorflow/lite/c:common",
-        "//tensorflow/lite/micro:micro_framework",
+        "//tensorflow/lite/micro:micro_error_reporter",
         "//tensorflow/lite/micro/testing:micro_test",
     ],
 )
@@ -84,7 +110,7 @@ cc_library(
     ],
     deps = [
         "//tensorflow/lite/c:common",
-        "//tensorflow/lite/micro:micro_framework",
+        "//tensorflow/lite/micro:micro_error_reporter",
     ],
 )
 
@@ -106,14 +132,18 @@ cc_binary(
         "main_functions.cc",
         "main_functions.h",
     ],
+    tags = [
+        "no_oss",  # TODO(b/174680668): Exclude from OSS.
+    ],
     deps = [
         ":detection_responder",
         ":image_provider",
         ":model_settings",
         ":person_detect_model_data",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/micro:micro_error_reporter",
         "//tensorflow/lite/micro:micro_framework",
-        "//tensorflow/lite/micro/kernels:micro_ops",
+        "//tensorflow/lite/micro:op_resolvers",
         "//tensorflow/lite/schema:schema_fbs",
     ],
 )

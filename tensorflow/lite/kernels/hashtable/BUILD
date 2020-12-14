@@ -1,4 +1,4 @@
-load("//tensorflow/lite/micro:build_def.bzl", "cc_library")
+load("//tensorflow:tensorflow.bzl", "pybind_extension")
 
 package(
     default_visibility = [
@@ -25,7 +25,6 @@ cc_library(
         "//tensorflow/lite/core/api",
         "//tensorflow/lite/experimental/resource",
         "//tensorflow/lite/kernels:kernel_util",
-        "//tensorflow/lite/kernels:op_macros",
         "//tensorflow/lite/kernels/internal:tensor",
         "//tensorflow/lite/schema:schema_fbs",
         "@flatbuffers",
@@ -50,5 +49,23 @@ cc_test(
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@flatbuffers",
+    ],
+)
+
+pybind_extension(
+    name = "pywrap_hashtable_ops",
+    srcs = [
+        "hashtable_ops_wrapper.cc",
+    ],
+    hdrs = ["hashtable_ops.h"],
+    additional_exported_symbols = ["HashtableOpsRegisterer"],
+    link_in_framework = True,
+    module_name = "pywrap_hashtable_ops",
+    deps = [
+        ":hashtable_op_kernels",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite/kernels:builtin_ops",
+        "//third_party/python_runtime:headers",
+        "@pybind11",
     ],
 )
